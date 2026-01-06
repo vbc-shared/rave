@@ -14,7 +14,7 @@ processing:
   # Slice selection - automatically select middle slices
   slice_selection:
     enabled: true
-    slices: 256  # Select middle 256 slices for spine CT
+    slices: 2048  # Select middle 256 slices for spine CT
 
 # External exporter configuration
 # Use one of: lz4_fast, video_hevc

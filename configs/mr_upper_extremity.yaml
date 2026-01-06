@@ -12,7 +12,7 @@ processing:
   # Slice selection - automatically select middle slices
   slice_selection:
     enabled: true
-    slices: 64  # Select middle 64 slices for extremity MR
+    slices: 2048  # Select middle 64 slices for extremity MR
   # Debug helpers
   debug:
     save_resampled_nifti: false

@@ -5,14 +5,14 @@ anatomy: others
 # Modality-specific processing settings
 processing:
   crop_pad:
-    size: [384, 384]  # Standard size for misc CT (H, W) - crop or pad to this
+    size: [512, 512]  # Standard size for misc CT (H, W) - crop or pad to this
   resampling:
     target_spacing: [1.25, 1.25, 1.25]  # Standard CT spacing (x, y, z in mm)
   conversion_backend: "sitk"
   # Slice selection - automatically select middle slices
   slice_selection:
     enabled: true
-    slices: 256  # Select middle 256 slices
+    slices: 2048  # Select middle 256 slices
 
 # External exporter configuration
 exporter_config: "video_hevc"  # HEVC video compression for 3D volumes
