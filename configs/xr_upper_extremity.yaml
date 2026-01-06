@@ -1,0 +1,25 @@
+# Vision-engine configuration for X-ray upper extremity imaging (arms, shoulders, elbows, wrists, hands)
+modality: XR
+anatomy: upper_extremity
+
+# Modality-specific processing settings
+processing:
+  resize: [1024, 1024]  # Standard size for X-rays
+  windowing:
+    method: "none"  # Default to raw values for maximum flexibility
+  resampling:
+    target_spacing: null  # X-rays are 2D
+  conversion_backend: "sitk"
+
+# External exporter configuration
+exporter_config: "hevc_image"
+
+# Performance
+parallel:
+  workers: 4
+
+# Logging
+logging:
+  level: "INFO"
+  file: null
+

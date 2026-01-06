@@ -1,0 +1,28 @@
+# Vision-engine configuration for MR chest
+modality: MR
+anatomy: chest
+
+# Modality-specific processing settings
+processing:
+  crop_pad:
+    size: [384, 384]  # Standard resolution for chest MR (H, W)
+  resampling:
+    target_spacing: [1.0, 1.0, 1.5]  # Chest MR spacing (x, y, z in mm)
+  conversion_backend: "sitk"
+  # Slice selection - automatically select middle slices
+  slice_selection:
+    enabled: true
+    slices: 128  # Select middle 128 slices for chest MR
+  # Debug helpers
+  debug:
+    save_resampled_nifti: false
+    output_dir: test_output_mr/intermediate_nifti
+
+# External exporter configuration
+exporter_config: "video_hevc_mr"  # MR-specific HEVC video compression
+
+# Logging
+logging:
+  level: "INFO"
+  file: null
+

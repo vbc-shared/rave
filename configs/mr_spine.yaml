@@ -1,0 +1,31 @@
+# Vision-engine configuration for MR spine
+# Based on MR prostate configuration with modifications for spine MR
+
+modality: MR
+anatomy: spine
+
+# Modality-specific processing settings
+processing:
+  crop_pad:
+    size: [512, 512]  # Higher resolution for spine detail (H, W) - crop or pad to this
+  resampling:
+    target_spacing: [0.5, 0.5, 2.0]  # High in-plane resolution, typical slice thickness for spine (x, y, z in mm)
+  conversion_backend: "sitk"
+  # Slice selection - automatically select middle slices
+  slice_selection:
+    enabled: true
+    slices: 128  # Select middle 128 slices for spine MR
+  # Debug helpers
+  debug:
+    save_resampled_nifti: false
+    output_dir: test_output_mr/intermediate_nifti
+
+# External exporter configuration
+# Use one of: lz4_fast, video_hevc
+exporter_config: "video_hevc_mr"  # MR-specific HEVC video compression for 3D volumes
+
+# Logging
+logging:
+  level: "INFO"
+  file: null
+

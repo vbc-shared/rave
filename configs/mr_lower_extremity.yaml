@@ -1,0 +1,28 @@
+# Vision-engine configuration for MR lower extremity (legs, knees, ankles, feet)
+modality: MR
+anatomy: lower_extremity
+
+# Modality-specific processing settings
+processing:
+  crop_pad:
+    size: [384, 384]  # Standard resolution for extremity MR (H, W)
+  resampling:
+    target_spacing: [0.5, 0.5, 3.0]  # High in-plane resolution, typical slice gap for extremity (x, y, z in mm)
+  conversion_backend: "sitk"
+  # Slice selection - automatically select middle slices
+  slice_selection:
+    enabled: true
+    slices: 64  # Select middle 64 slices for extremity MR
+  # Debug helpers
+  debug:
+    save_resampled_nifti: false
+    output_dir: test_output_mr/intermediate_nifti
+
+# External exporter configuration
+exporter_config: "video_hevc_mr"  # MR-specific HEVC video compression
+
+# Logging
+logging:
+  level: "INFO"
+  file: null
+

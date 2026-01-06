@@ -1,0 +1,27 @@
+# Vision-engine configuration for CT spine
+# Based on CT chest configuration with modifications for spine CT
+
+modality: CT
+anatomy: spine
+
+# Modality-specific processing settings
+processing:
+  crop_pad:
+    size: [512, 512]  # Higher resolution for spine CT vertebral detail (H, W) - crop or pad to this
+  resampling:
+    target_spacing: [0.5, 0.5, 1.25]  # High in-plane resolution for spine CT (x, y, z in mm)
+  conversion_backend: "sitk"
+  # Slice selection - automatically select middle slices
+  slice_selection:
+    enabled: true
+    slices: 256  # Select middle 256 slices for spine CT
+
+# External exporter configuration
+# Use one of: lz4_fast, video_hevc
+exporter_config: "video_hevc"  # HEVC video compression for 3D volumes
+
+# Logging
+logging:
+  level: "INFO"
+  file: null
+

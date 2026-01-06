@@ -1,0 +1,31 @@
+# Vision-engine configuration for MR brain
+# Based on MR breast configuration with modifications for brain MR
+
+modality: MR
+anatomy: brain
+
+# Modality-specific processing settings
+processing:
+  crop_pad:
+    size: [256, 256]  # Standard resolution for brain MR (H, W) - crop or pad to this
+  resampling:
+    target_spacing: [1.0, 1.0, 1.0]  # Isotropic spacing for brain MR (x, y, z in mm)
+  conversion_backend: "sitk"
+  # Slice selection - automatically select middle slices
+  slice_selection:
+    enabled: true
+    slices: 192  # Select middle 192 slices for brain MR
+  # Debug helpers
+  debug:
+    save_resampled_nifti: false
+    output_dir: test_output_mr/intermediate_nifti
+
+# External exporter configuration
+# Use one of: lz4_fast, video_hevc
+exporter_config: "video_hevc_mr"  # MR-specific HEVC video compression for 3D volumes
+
+# Logging
+logging:
+  level: "INFO"
+  file: null
+
