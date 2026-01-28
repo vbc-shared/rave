@@ -49,6 +49,10 @@ class MRProcessor(BaseProcessor):
             crop_pad_config = self.config.processing.get("crop_pad", {})
             target_size = crop_pad_config.get("size", None)
 
+            # Get orientation info (stored during _sitk_convert or _pydicom_convert)
+            orientation_info = getattr(self, '_last_orientation_info', {})
+            excluded_slice_count = getattr(self, '_last_excluded_slice_count', 0)
+
             # Create processing metadata
             processing_metadata = {
                 "modality": "MR",
@@ -64,12 +68,14 @@ class MRProcessor(BaseProcessor):
                 "final_shape": processed_volume.shape,
                 "crop_pad_target": target_size,
                 "slice_count": processed_volume.shape[0],
+                "excluded_slice_count": excluded_slice_count,
                 "value_range": "raw_signal_intensity",  # MR uses signal intensity, not HU
                 "series_instance_uid": series_info.series_uid,
                 "slice_info": getattr(
                     series_info, "slice_info", []
                 ),  # Will be populated if available
                 "is_mask": bool(self._last_is_mask),
+                **orientation_info,  # Add orientation metadata
             }
 
             return ProcessedSeries(
@@ -111,6 +117,10 @@ class MRProcessor(BaseProcessor):
             # It's a DICOM directory, convert as usual
             return self._sitk_convert(path)
         except Exception as e:
+            # Check if it's a pixel type error that pydicom can handle
+            if "Pixel type larger than output type" in str(e):
+                logger.warning(f"SimpleITK failed with pixel type error, falling back to pydicom: {e}")
+                return self._pydicom_convert(path)
             raise ProcessingError(f"DICOM conversion failed: {e}")
 
     def _sitk_convert(self, dicom_path: str) -> Tuple[sitk.Image, np.ndarray]:
@@ -123,6 +133,15 @@ class MRProcessor(BaseProcessor):
 
         if not dicom_names:
             raise ProcessingError(f"No DICOM files found in: {dicom_path}")
+
+        # Filter to keep only files with consistent dimensions (majority dimension)
+        dicom_names = self._filter_consistent_dimensions(dicom_names)
+
+        if not dicom_names:
+            raise ProcessingError(f"No DICOM files with consistent dimensions in: {dicom_path}")
+
+        # Extract orientation info before sorting
+        self._last_orientation_info = self._extract_orientation_info(dicom_names[0])
 
         # Sort by instance number and position
         dicom_names = self._sort_dicom_files(dicom_names)
@@ -144,6 +163,170 @@ class MRProcessor(BaseProcessor):
         logger.debug(f"Pixel type: {pixel_type}")
 
         return image, spacing
+
+    def _extract_orientation_info(self, dicom_file: str) -> dict:
+        """Extract ImageOrientationPatient and derive orientation from a DICOM file."""
+        import pydicom
+        
+        try:
+            ds = pydicom.dcmread(dicom_file, stop_before_pixels=True)
+            
+            if not hasattr(ds, 'ImageOrientationPatient'):
+                return {}
+            
+            iop = [float(x) for x in ds.ImageOrientationPatient]
+            
+            # Compute normal vector (cross product of row and column directions)
+            row_dir = np.array(iop[0:3])
+            col_dir = np.array(iop[3:6])
+            normal = np.cross(row_dir, col_dir)
+            
+            # Determine orientation based on largest component of normal
+            abs_normal = np.abs(normal)
+            max_idx = np.argmax(abs_normal)
+            orientation = ['SAGITTAL', 'CORONAL', 'AXIAL'][max_idx]
+            
+            logger.debug(f"Orientation: {orientation} (normal={normal.tolist()})")
+            
+            return {
+                "image_orientation_patient": iop,
+                "orientation": orientation,
+                "orientation_normal": normal.tolist(),
+            }
+        except Exception as e:
+            logger.warning(f"Could not extract orientation info: {e}")
+            return {}
+
+    def _pydicom_convert(self, dicom_path: str) -> Tuple[sitk.Image, np.ndarray]:
+        """Fallback DICOM conversion using pydicom when SimpleITK fails.
+        
+        This handles cases where GDCM has trouble with certain pixel encodings
+        (e.g., signed 16-bit with large RescaleIntercept).
+        """
+        import pydicom
+        from pathlib import Path
+        
+        logger.debug(f"Converting DICOM series using pydicom fallback: {dicom_path}")
+        
+        # Get DICOM files
+        dicom_dir = Path(dicom_path)
+        dcm_files = list(dicom_dir.glob("*.dcm"))
+        if not dcm_files:
+            dcm_files = list(dicom_dir.glob("*"))  # Try without extension
+            dcm_files = [f for f in dcm_files if f.is_file()]
+        
+        if not dcm_files:
+            raise ProcessingError(f"No DICOM files found in: {dicom_path}")
+        
+        # Filter for consistent dimensions
+        dcm_files = self._filter_consistent_dimensions([str(f) for f in dcm_files])
+        
+        # Extract orientation info
+        if dcm_files:
+            self._last_orientation_info = self._extract_orientation_info(dcm_files[0])
+        
+        # Read all slices and collect position info
+        slices_data = []
+        for f in dcm_files:
+            ds = pydicom.dcmread(f)
+            
+            # Get position for sorting
+            if hasattr(ds, 'ImagePositionPatient'):
+                pos = float(ds.ImagePositionPatient[2])
+            elif hasattr(ds, 'SliceLocation'):
+                pos = float(ds.SliceLocation)
+            else:
+                pos = float(getattr(ds, 'InstanceNumber', 0))
+            
+            slices_data.append((pos, ds))
+        
+        # Sort by position
+        slices_data.sort(key=lambda x: x[0])
+        slices = [s[1] for s in slices_data]
+        positions = [s[0] for s in slices_data]
+        
+        # Stack pixel arrays and apply rescale if present
+        pixel_arrays = []
+        for ds in slices:
+            arr = ds.pixel_array.astype(np.float32)
+            
+            # Apply RescaleSlope and RescaleIntercept if present
+            slope = float(getattr(ds, 'RescaleSlope', 1.0))
+            intercept = float(getattr(ds, 'RescaleIntercept', 0.0))
+            if slope != 1.0 or intercept != 0.0:
+                arr = arr * slope + intercept
+            
+            pixel_arrays.append(arr)
+        
+        volume = np.stack(pixel_arrays, axis=0)
+        logger.debug(f"Pydicom volume shape: {volume.shape}, range: [{volume.min():.1f}, {volume.max():.1f}]")
+        
+        # Get spacing
+        ds = slices[0]
+        pixel_spacing = ds.PixelSpacing if hasattr(ds, 'PixelSpacing') else [1.0, 1.0]
+        if len(positions) > 1:
+            slice_spacing = abs(positions[1] - positions[0])
+        else:
+            slice_spacing = float(getattr(ds, 'SliceThickness', 1.0))
+        
+        # Convert back to int16 for consistency with rest of pipeline
+        # Clip to valid int16 range
+        volume = np.clip(volume, -32768, 32767).astype(np.int16)
+        
+        # Create SimpleITK image
+        sitk_image = sitk.GetImageFromArray(volume)
+        sitk_image.SetSpacing([float(pixel_spacing[0]), float(pixel_spacing[1]), float(slice_spacing)])
+        
+        spacing = np.array(sitk_image.GetSpacing())
+        logger.debug(f"Pydicom conversion complete. Spacing: {spacing} mm")
+        
+        return sitk_image, spacing
+
+    def _filter_consistent_dimensions(self, dicom_names: List[str]) -> List[str]:
+        """Filter DICOM files to keep only those with the majority dimension.
+        
+        This handles cases where scout/localizer images with different dimensions
+        are incorrectly bundled into a series.
+        """
+        import pydicom
+        from collections import Counter
+        
+        # Read dimensions for each file
+        file_dims = []
+        for dcm_file in dicom_names:
+            try:
+                dcm = pydicom.dcmread(dcm_file, stop_before_pixels=True)
+                dim = (int(dcm.Rows), int(dcm.Columns))
+                file_dims.append((dcm_file, dim))
+            except Exception:
+                continue
+        
+        if not file_dims:
+            return dicom_names  # Fallback to original
+        
+        # Find the majority dimension
+        dim_counts = Counter(dim for _, dim in file_dims)
+        
+        if len(dim_counts) == 1:
+            # All files have same dimension, no filtering needed
+            self._last_excluded_slice_count = 0
+            return dicom_names
+        
+        majority_dim, majority_count = dim_counts.most_common(1)[0]
+        total_files = len(file_dims)
+        excluded_count = total_files - majority_count
+        
+        # Store for metadata
+        self._last_excluded_slice_count = excluded_count
+        
+        logger.warning(
+            f"Inconsistent DICOM dimensions detected: {dict(dim_counts)}. "
+            f"Keeping {majority_count} files with dimension {majority_dim}, "
+            f"excluding {excluded_count} outlier files."
+        )
+        
+        # Return only files with majority dimension
+        return [f for f, dim in file_dims if dim == majority_dim]
 
     def _sort_dicom_files(self, dicom_names: List[str]) -> List[str]:
         """Sort DICOM files by instance number and position"""
@@ -275,9 +458,9 @@ class MRProcessor(BaseProcessor):
         original_spacing = image.GetSpacing()
         original_size = image.GetSize()
 
-        # Calculate new size based on spacing change
+        # Calculate new size based on spacing change, with minimum of 1 per dimension
         new_size = [
-            int(round(original_size[i] * original_spacing[i] / target_spacing[i]))
+            max(1, int(round(original_size[i] * original_spacing[i] / target_spacing[i])))
             for i in range(3)
         ]
 

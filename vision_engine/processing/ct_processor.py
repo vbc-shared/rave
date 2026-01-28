@@ -45,6 +45,10 @@ class CTProcessor(BaseProcessor):
             crop_pad_config = self.config.processing.get("crop_pad", {})
             target_size = crop_pad_config.get("size", None)
 
+            # Get orientation info (stored during _sitk_convert)
+            orientation_info = getattr(self, '_last_orientation_info', {})
+            excluded_slice_count = getattr(self, '_last_excluded_slice_count', 0)
+
             # Create processing metadata
             processing_metadata = {
                 "modality": "CT",
@@ -57,11 +61,13 @@ class CTProcessor(BaseProcessor):
                 "final_shape": processed_volume.shape,
                 "crop_pad_target": target_size,
                 "slice_count": processed_volume.shape[0],
+                "excluded_slice_count": excluded_slice_count,
                 "value_range": "raw_hounsfield_units",
                 "series_uid": series_info.series_uid,
                 "slice_info": getattr(
                     series_info, "slice_info", []
                 ),  # Will be populated if available
+                **orientation_info,  # Add orientation metadata
             }
 
             return ProcessedSeries(
@@ -116,6 +122,15 @@ class CTProcessor(BaseProcessor):
         if not dicom_names:
             raise ProcessingError(f"No DICOM files found in: {dicom_path}")
 
+        # Filter to keep only files with consistent dimensions (majority dimension)
+        dicom_names = self._filter_consistent_dimensions(dicom_names)
+
+        if not dicom_names:
+            raise ProcessingError(f"No DICOM files with consistent dimensions in: {dicom_path}")
+
+        # Extract orientation info before sorting
+        self._last_orientation_info = self._extract_orientation_info(dicom_names[0])
+
         # Sort by instance number and position
         dicom_names = self._sort_dicom_files(dicom_names)
 
@@ -136,6 +151,85 @@ class CTProcessor(BaseProcessor):
         logger.debug(f"Pixel type: {pixel_type}")
 
         return image, spacing
+
+    def _extract_orientation_info(self, dicom_file: str) -> dict:
+        """Extract ImageOrientationPatient and derive orientation from a DICOM file."""
+        import pydicom
+        
+        try:
+            ds = pydicom.dcmread(dicom_file, stop_before_pixels=True)
+            
+            if not hasattr(ds, 'ImageOrientationPatient'):
+                return {}
+            
+            iop = [float(x) for x in ds.ImageOrientationPatient]
+            
+            # Compute normal vector (cross product of row and column directions)
+            row_dir = np.array(iop[0:3])
+            col_dir = np.array(iop[3:6])
+            normal = np.cross(row_dir, col_dir)
+            
+            # Determine orientation based on largest component of normal
+            abs_normal = np.abs(normal)
+            max_idx = np.argmax(abs_normal)
+            orientation = ['SAGITTAL', 'CORONAL', 'AXIAL'][max_idx]
+            
+            logger.debug(f"Orientation: {orientation} (normal={normal.tolist()})")
+            
+            return {
+                "image_orientation_patient": iop,
+                "orientation": orientation,
+                "orientation_normal": normal.tolist(),
+            }
+        except Exception as e:
+            logger.warning(f"Could not extract orientation info: {e}")
+            return {}
+
+    def _filter_consistent_dimensions(self, dicom_names: List[str]) -> List[str]:
+        """Filter DICOM files to keep only those with the majority dimension.
+        
+        This handles cases where scout/localizer images with different dimensions
+        are incorrectly bundled into a series.
+        """
+        import pydicom
+        from collections import Counter
+        
+        # Read dimensions for each file
+        file_dims = []
+        for dcm_file in dicom_names:
+            try:
+                dcm = pydicom.dcmread(dcm_file, stop_before_pixels=True)
+                dim = (int(dcm.Rows), int(dcm.Columns))
+                file_dims.append((dcm_file, dim))
+            except Exception:
+                continue
+        
+        if not file_dims:
+            return dicom_names  # Fallback to original
+        
+        # Find the majority dimension
+        dim_counts = Counter(dim for _, dim in file_dims)
+        
+        if len(dim_counts) == 1:
+            # All files have same dimension, no filtering needed
+            self._last_excluded_slice_count = 0
+            return dicom_names
+        
+        majority_dim, majority_count = dim_counts.most_common(1)[0]
+        total_files = len(file_dims)
+        excluded_count = total_files - majority_count
+        
+        # Store for metadata
+        self._last_excluded_slice_count = excluded_count
+        
+        logger.warning(
+            f"Inconsistent DICOM dimensions detected: {dict(dim_counts)}. "
+            f"Keeping {majority_count} files with dimension {majority_dim}, "
+            f"excluding {excluded_count} outlier files."
+        )
+        
+        # Return only files with majority dimension
+        return [f for f, dim in file_dims if dim == majority_dim]
 
     def _sort_dicom_files(self, dicom_names: List[str]) -> List[str]:
         """Sort DICOM files by instance number and position (from reference code)"""
