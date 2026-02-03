@@ -43,10 +43,13 @@ class XRayProcessor(BaseProcessor):
             if not dcm_files:
                 raise ProcessingError(f"No DICOM files found in: {dicom_path}")
 
-            for dcm_file in dcm_files:
-                dcm_path = os.path.join(dicom_path, dcm_file)
+            # Sort DICOM files by InstanceNumber for consistent ordering
+            dcm_files_sorted = self._sort_dicoms_by_instance(dicom_path, dcm_files)
+
+            for dcm_file in dcm_files_sorted:
+                dcm_full_path = os.path.join(dicom_path, dcm_file)
                 logger.info(f"Processing DICOM file: {dcm_file}")
-                processed_image, shape_info = self._process_xray_image(dcm_path)
+                processed_image, shape_info = self._process_xray_image(dcm_full_path)
                 logger.info(
                     f"Processed image shape: {processed_image.shape}, dtype: {processed_image.dtype}, range: [{processed_image.min()}, {processed_image.max()}]"
                 )
@@ -160,12 +163,38 @@ class XRayProcessor(BaseProcessor):
         logger.debug(
             f"Processed X-ray image shape: {final_shape_hw}, range: [{image.min():.1f}, {image.max():.1f}]"
         )
+        # Extract InstanceNumber for 1:1 directory naming
+        instance_number = getattr(dcm, "InstanceNumber", None)
+        if instance_number is not None:
+            instance_number = int(instance_number)
+
         shape_info = {
             "source": os.path.basename(dcm_path),
             "original_shape": list(original_shape_hw),
             "final_shape": list(final_shape_hw),
+            "instance_number": instance_number,
         }
         return image, shape_info
+
+    def _sort_dicoms_by_instance(self, dicom_dir: str, dcm_files: List[str]) -> List[str]:
+        """Sort DICOM files by InstanceNumber for consistent ordering."""
+        if len(dcm_files) <= 1:
+            return dcm_files
+
+        # Read InstanceNumber from each file
+        file_instances = []
+        for dcm_file in dcm_files:
+            dcm_path = os.path.join(dicom_dir, dcm_file)
+            dcm = pydicom.dcmread(dcm_path, stop_before_pixels=True)
+            instance_num = getattr(dcm, "InstanceNumber", 0)
+            file_instances.append((dcm_file, int(instance_num) if instance_num else 0))
+
+        # Sort by InstanceNumber
+        file_instances.sort(key=lambda x: x[1])
+        sorted_files = [f[0] for f in file_instances]
+
+        logger.debug(f"Sorted {len(dcm_files)} DICOMs by InstanceNumber")
+        return sorted_files
 
     def _apply_histogram_equalization(self, image: np.ndarray) -> np.ndarray:
         """Apply histogram equalization to enhance contrast"""
