@@ -12,6 +12,10 @@ SimpleITK>=2.1.0
 torchio>=0.18.0
 nibabel>=5.0.0
 
+# DICOM decompression (for JPEG Lossless transfer syntax)
+pylibjpeg>=2.0.0
+pylibjpeg-libjpeg>=2.0.0
+
 # Image processing
 scikit-image>=0.18.0
 matplotlib>=3.5.0
