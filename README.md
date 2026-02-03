@@ -2,15 +2,6 @@
 
 A high-performance medical image processing engine for converting DICOM and NIfTI files into ML-ready formats with intelligent windowing and compression.
 
-### Installation with uv
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
-uv sync
-source .venv/bin/activate
-```
-
 #### Verify Installation
 
 ```python
